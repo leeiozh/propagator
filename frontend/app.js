@@ -1,37 +1,27 @@
-// =====================
-// КОНСТАНТЫ
-// =====================
 const CONST = {
     R_EARTH: 6378137,
     SCALE: 1 / 6378137,
     SAT_SIZE: 0.02,
-    EARTH_COLOR: 0x051650
+    EARTH_COLOR: 0x051650,
+    OMEGA_EARTH: 7.2921159e-5
 };
 
-// =====================
-// СЦЕНА
-// =====================
+let simTime = 0;
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-// камера
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, -3, 2);
 
-// renderer
 const renderer = new THREE.WebGLRenderer({antialias: true});
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.getElementById("left").appendChild(renderer.domElement);
 
-// controls
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 
-// свет (простой и стабильный)
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-// =====================
-// ЗЕМЛЯ (СТАБИЛЬНАЯ)
-// =====================
 const earth = new THREE.Mesh(
     new THREE.SphereGeometry(1, 64, 64),
     new THREE.MeshPhongMaterial({
@@ -40,6 +30,10 @@ const earth = new THREE.Mesh(
     })
 );
 scene.add(earth);
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(5, 2, 3);  // направление света
+scene.add(sun);
 
 function addEarthAxis() {
     const axisGeom = new THREE.BufferGeometry().setFromPoints([
@@ -57,13 +51,6 @@ function addEarthAxis() {
 
 addEarthAxis();
 
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-sun.position.set(5, 2, 3);  // направление света
-scene.add(sun);
-
-// слабая подсветка ночной стороны
-scene.add(new THREE.AmbientLight(0x222233, 0.3));
-
 // =====================
 // СПУТНИКИ
 // =====================
@@ -71,6 +58,7 @@ let satMeshes = [];
 let trajectoriesGlobal = [];
 let step = 0;
 let orbitLines = [];
+let coverageMeshes = [];
 
 function getColor(i, total) {
     const hue = i / total;
@@ -88,19 +76,60 @@ function createSatellite(color) {
     return mesh;
 }
 
-// создание спутника
-function createSatellite() {
-    const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(CONST.SAT_SIZE, 8, 8),
-        new THREE.MeshBasicMaterial({color: 0xff0000})
-    );
-    scene.add(mesh);
-    return mesh;
+function getCoverageAngle(r_sat) {
+    return Math.acos(CONST.R_EARTH / r_sat);
 }
 
-// =====================
-// ОРБИТЫ
-// =====================
+function createCoverageMesh(color) {
+
+    const material = new THREE.LineBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.4
+    });
+
+    const geometry = new THREE.BufferGeometry();
+    const line = new THREE.LineLoop(geometry, material);
+
+    scene.add(line);
+
+    return line;
+}
+
+function updateCoverageMesh(mesh, satPos) {
+
+    const r_sat = satPos.length() * CONST.R_EARTH; // обратно в метры
+    const psi = Math.acos(CONST.R_EARTH / r_sat);
+
+    const n = satPos.clone().normalize(); // направление спутника
+
+    // ортонормированный базис на сфере
+    let u = new THREE.Vector3(0, 0, 1).cross(n);
+    if (u.length() < 1e-6) u = new THREE.Vector3(1, 0, 0);
+
+    u.normalize();
+    const v = n.clone().cross(u);
+
+    const points = [];
+
+    const segments = 64;
+
+    for (let i = 0; i < segments; i++) {
+
+        const phi = 2 * Math.PI * i / segments;
+
+        const dir = n.clone().multiplyScalar(Math.cos(psi))
+            .add(u.clone().multiplyScalar(Math.sin(psi) * Math.cos(phi)))
+            .add(v.clone().multiplyScalar(Math.sin(psi) * Math.sin(phi)));
+
+        const point = dir.normalize(); // точка НА сфере
+
+        points.push(point);
+    }
+
+    mesh.geometry.setFromPoints(points);
+}
+
 function drawOrbit(traj, color) {
 
     const points = traj.map(p =>
@@ -122,17 +151,16 @@ function drawOrbit(traj, color) {
     orbitLines.push(line);
 }
 
-// =====================
-// ЗАПУСК
-// =====================
 function runSim() {
 
-    // очистка
     satMeshes.forEach(s => scene.remove(s));
     satMeshes = [];
 
     orbitLines.forEach(o => scene.remove(o));
     orbitLines = [];
+
+    coverageMeshes.forEach(c => scene.remove(c));
+    coverageMeshes = [];
 
     const params = getParams();
 
@@ -146,14 +174,13 @@ function runSim() {
 
             trajectoriesGlobal = data.trajectories;
 
-            // создаём спутники
             for (let i = 0; i < trajectoriesGlobal.length; i++) {
                 const color = getColor(i, trajectoriesGlobal.length);
 
                 satMeshes.push(createSatellite(color));
                 drawOrbit(trajectoriesGlobal[i], color);
+                coverageMeshes.push(createCoverageMesh(color));
             }
-
         });
 }
 
@@ -171,11 +198,15 @@ function update3D() {
 
         const p = traj[step % traj.length];
 
-        mesh.position.set(
+        const satPos = new THREE.Vector3(
             p[0] * CONST.SCALE,
             p[1] * CONST.SCALE,
             p[2] * CONST.SCALE
         );
+
+        mesh.position.copy(satPos);
+
+        updateCoverageMesh(coverageMeshes[i], satPos);
     }
 
     step++;
@@ -185,8 +216,17 @@ function update3D() {
 // 2D КАРТА
 // =====================
 const canvas2d = document.createElement("canvas");
-document.getElementById("top2d").appendChild(canvas2d);
+const container2d = document.getElementById("top2d");
+container2d.appendChild(canvas2d);
 const ctx = canvas2d.getContext("2d");
+
+function resize2D() {
+    canvas2d.width = container2d.clientWidth;
+    canvas2d.height = container2d.clientHeight;
+}
+
+window.addEventListener("resize", resize2D);
+resize2D();
 
 // простая карта (контуры)
 function drawEarthMap(w, h) {
@@ -221,24 +261,22 @@ function xyzToLatLon(p) {
 // анимация 2D
 function update2D() {
 
-    const w = canvas2d.width = canvas2d.clientWidth;
-    const h = canvas2d.height = canvas2d.clientHeight;
+    drawEarthMap();
 
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
-
-    drawEarthMap(w, h);
+    const w = canvas2d.width;
+    const h = canvas2d.height;
 
     ctx.fillStyle = "#00ff88";
 
     for (let i = 0; i < trajectoriesGlobal.length; i++) {
-
         const traj = trajectoriesGlobal[i];
         if (!traj) continue;
 
         const p = traj[step % traj.length];
 
-        const {lat, lon} = xyzToLatLon(p);
+        const r = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        const lat = Math.asin(p[2] / r);
+        const lon = Math.atan2(p[1], p[0]);
 
         const x = (lon + Math.PI) / (2 * Math.PI) * w;
         const y = (Math.PI / 2 - lat) / Math.PI * h;
@@ -260,6 +298,14 @@ function animate() {
 
     controls.update();
     renderer.render(scene, camera);
+
+    simTime += 10; // dt TODO (синхронизировать с backend)
+
+    const date = new Date(simTime * 1000);
+    document.getElementById("timeLabel").innerText =
+        date.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+
+    earth.rotation.y += CONST.OMEGA_EARTH * 10;
 }
 
 animate();

@@ -32,7 +32,7 @@ function generateSatellites(n) {
     for (let k = 0; k < n; k++) {
         sats.push({
             raan: 2 * Math.PI * k / n,
-            nu: 2 * Math.PI * k / n
+            nu: 0
         });
     }
     return sats;
