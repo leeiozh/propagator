@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Satellite Simulator</title>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+
+<style>
+body { margin:0; overflow:hidden; background:#0a0a0f; color:#ccc; font-family:monospace;}
+#root { display:flex; height:100vh; }
+
+#left { flex:1; position:relative; }
+#right { width:320px; display:flex; flex-direction:column; }
+#top2d { flex:1; border-bottom:1px solid #222; }
+#bottom { flex:1; }
+
+#panel {
+  position:absolute;
+  top:10px; left:10px;
+  background:#111;
+  padding:12px;
+  border:1px solid #333;
+  z-index:10;
+}
+
+label { display:block; margin-top:8px; }
+.value { color:#6eb5ff; float:right; }
+</style>
+</head>
+
+<body>
+<div id="root">
+
+  <div id="left">
+    <div id="panel">
+
+      <button onclick="runSim()">Run</button>
+
+      <label>
+        Altitude
+        <span id="altVal" class="value"></span>
+        <input id="alt" type="range" min="200" max="10000" value="400">
+      </label>
+
+      <label>
+        Inclination
+        <span id="incVal" class="value"></span>
+        <input id="inc" type="range" min="0" max="90" value="90">
+      </label>
+
+      <label>
+        Eccentricity
+        <span id="eccVal" class="value"></span>
+        <input id="ecc" type="range" min="0" max="0.99" step="0.01" value="0">
+      </label>
+
+      <label>
+        Satellites
+        <span id="nVal" class="value"></span>
+        <input id="n" type="range" min="1" max="20" value="4">
+      </label>
+
+    </div>
+  </div>
+
+  <div id="right">
+    <div id="top2d"></div>
+    <div id="bottom"></div>
+  </div>
+
+</div>
+
+<script src="controls.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
