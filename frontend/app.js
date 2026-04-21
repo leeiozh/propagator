@@ -6,7 +6,8 @@ const CONST = {
     SCALE:       1 / 6378137,
     SAT_SIZE:    0.022,
     OMEGA_EARTH: 7.2921159e-5,
-    DT:          10
+    DT:          10,
+    SIM_SPEED:   1.0
 };
 
 const TRAIL_LEN  = 900;   // ~1.7 витка при 400 км
@@ -73,7 +74,18 @@ function planeColor(planeIdx, nPlanes) {
 }
 
 function updateCoverageMesh(mesh, satPos) {
-    const psi = Math.acos(CONST.R_EARTH / (satPos.length() * CONST.R_EARTH));
+const theta = parseFloat(document.getElementById("fov").value) * Math.PI/180;
+
+    const r_s = satPos.length(); // в нормированных единицах (R=1)
+    const R   = 1.0;
+
+    // геометрия конуса от надира
+    let psi = Math.asin(Math.min(1, (r_s / R) * Math.sin(theta)));
+
+    // ограничение горизонтом
+    const psi_max = Math.acos(R / r_s);
+    psi = Math.min(psi, psi_max);
+
     const n = satPos.clone().normalize();
     let u = new THREE.Vector3(0, 1, 0).cross(n);
     if (u.length() < 1e-6) u = new THREE.Vector3(1, 0, 0);
@@ -90,6 +102,7 @@ function updateCoverageMesh(mesh, satPos) {
         );
     }
     mesh.geometry.setFromPoints(pts);
+    mesh._coveragePoints = pts;
 }
 
 // =====================
@@ -98,6 +111,7 @@ function updateCoverageMesh(mesh, satPos) {
 let simTime   = 0;
 let activeSats  = [];
 let planeRings  = [];
+let simSpeed = 1.0;
 
 function clearSim() {
     activeSats.forEach(s => {
@@ -271,6 +285,18 @@ canvas2d.style.display = "block";
 container2d.appendChild(canvas2d);
 const ctx = canvas2d.getContext("2d");
 
+canvas2d.addEventListener("mousemove", (e) => {
+
+    const rect = canvas2d.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const lon = (x / canvas2d.width) * 2*Math.PI - Math.PI;
+    const lat = Math.PI/2 - (y / canvas2d.height) * Math.PI;
+
+    document.getElementById("coordLabel").innerText =
+        `lat ${(lat*180/Math.PI).toFixed(1)}°, lon ${(lon*180/Math.PI).toFixed(1)}°`;
+});
+
 function resize2D() {
     canvas2d.width  = container2d.clientWidth;
     canvas2d.height = container2d.clientHeight;
@@ -351,6 +377,43 @@ function update2D() {
         }
     });
 
+    activeSats.forEach(sat => {
+
+    if (!sat.coverageMesh._coveragePoints) return;
+
+    const css = "#" + sat.color.getHexString();
+
+    ctx.strokeStyle = css;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+
+    let first = true;
+
+    sat.coverageMesh._coveragePoints.forEach(p => {
+
+        // обратно в ECI (учитываем масштаб)
+        const r = [
+            p.x * CONST.R_EARTH,
+            -p.z * CONST.R_EARTH,
+            p.y * CONST.R_EARTH
+        ];
+
+        const { lat, lon } = xyzToLatLon(r, simTime);
+
+        const { x, y } = latLonToXY(lat, lon, w, h);
+
+        if (first) {
+            ctx.moveTo(x, y);
+            first = false;
+        } else {
+            ctx.lineTo(x, y);
+        }
+    });
+
+    ctx.closePath();
+    ctx.stroke();
+});
+
     ctx.globalAlpha = 1.0;
 }
 
@@ -359,15 +422,25 @@ function update2D() {
 // =====================
 function animate() {
     requestAnimationFrame(animate);
-    update3D();
+
+    simSpeed = parseFloat(document.getElementById("speed").value);
+
+    // сколько шагов проигрываем за кадр
+    const stepsPerFrame = Math.max(1, Math.floor(simSpeed));
+
+    for (let k = 0; k < stepsPerFrame; k++) {
+        update3D();
+        simTime += CONST.DT;
+        earth.rotation.y += CONST.OMEGA_EARTH * CONST.DT;
+    }
+
+    // update3D();
     update2D();
     orbitControls.update();
     renderer.render(scene, camera);
-    simTime += CONST.DT;
-    earth.rotation.y += CONST.OMEGA_EARTH * CONST.DT;
-    const d = new Date(simTime * 1000);
-    document.getElementById("timeLabel").innerText =
-        d.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+    // simTime += CONST.DT;
+    // earth.rotation.y += CONST.OMEGA_EARTH * CONST.DT;
+    document.getElementById("timeLabel").innerText = `${simTime.toFixed(0)} s`;
 }
 
 animate();

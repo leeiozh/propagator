@@ -11,6 +11,8 @@ function initControls() {
     bind("ecc",    v => parseFloat(v).toFixed(2));
     bind("planes", v => v);
     bind("spp",    v => v);
+    bind("fov",    v => `${v}°`);
+    bind("speed",  v => `${parseFloat(v).toFixed(1)}x`);
 }
 
 function getParams() {
@@ -30,7 +32,7 @@ function generateConstellation(planes, spp) {
     for (let p = 0; p < planes; p++) {
         const raan = 2 * Math.PI * p / planes;
         for (let s = 0; s < spp; s++) {
-            const nu = 2 * Math.PI * s / spp + 2 * Math.PI * p / T;
+            const nu = 2 * Math.PI * s / spp; // + 2 * Math.PI * p / T;
             sats.push({ raan, nu, planeIdx: p });
         }
     }
