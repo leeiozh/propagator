@@ -350,6 +350,10 @@ const NSR_NODES = [
     [119.011, 75.5215],
     [132.588, 75.6879],
     [136.221, 76.5145],
+    [148.0,   73.5],
+    [170.27,  69.70],
+    [191.1,   65.80],
+    [195.0,   64.8],
 ];
 
 function nsrLatAtLon(lonDeg) {
@@ -402,7 +406,6 @@ function vecNorm(r) {
 function isPointCoveredBySat(node, satR) {
 
     const satNorm = vecNorm(satR);
-    const tCheck = simTime + CONST.DT;
 
     const satUnit = [
         satR[0]/satNorm,
@@ -440,8 +443,6 @@ function updateRevisitGrid() {
     if (simTime - lastRevisitUpdate < 10) return;
     lastRevisitUpdate = simTime;
 
-    const tCheck = simTime + CONST.DT;
-
     revisitGrid.forEach((node, idx) => {
 
         let covered = false;
@@ -451,10 +452,10 @@ function updateRevisitGrid() {
 
             const satR = sat.buffer[sat.bufStep - 1];
 
-            if (isPointCoveredBySat(node, satR, tCheck)) covered = true;
+            if (isPointCoveredBySat(node, satR)) covered = true;
         });
 
-        if (covered) lastSeen[idx] = tCheck;
+        if (covered) lastSeen[idx] = simTime;
     });
 }
 
@@ -520,14 +521,16 @@ function updateNSRMap() {
 
         const barBase = h;
         const barMaxH = 100;
-        const bw = w / revisitGrid.length;
+        const lonRange = NSR_RECT.lonMax - NSR_RECT.lonMin;
+        const barW = Math.max(1, (1 * Math.PI / 180) / lonRange * w);
 
         for (let i=0; i<revisitGrid.length; i++) {
 
+            const node = revisitGrid[i];
             const dt = simTime - lastSeen[i];
             const remain = Math.max(0, ALLOW_TIME - dt);
 
-            const frac = remain / ALLOW_TIME;
+            const frac = Math.min(1, remain / ALLOW_TIME);
             const bh = frac * barMaxH;
 
             const hours = dt / 3600;
@@ -536,7 +539,8 @@ function updateNSRMap() {
             else if (hours > 2) ctxNSR.fillStyle = "yellow";
             else ctxNSR.fillStyle = "limegreen";
 
-            ctxNSR.fillRect(i*bw, barBase-bh, bw, bh);
+            const xPos = (node.lon - NSR_RECT.lonMin) / lonRange * w;
+            ctxNSR.fillRect(xPos, barBase - bh, barW, bh);
         }
     }
 
