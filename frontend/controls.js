@@ -69,7 +69,8 @@ function getParams() {
         e:      parseFloat(document.getElementById("ecc").value),
         i:      parseFloat(document.getElementById("inc").value) * Math.PI / 180,
         planes: parseInt(document.getElementById("planes").value),
-        spp:    parseInt(document.getElementById("spp").value)
+        spp:    parseInt(document.getElementById("spp").value),
+        swath:  parseInt(document.getElementById("swath").value)
     };
 }
 

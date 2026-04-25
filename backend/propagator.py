@@ -17,7 +17,7 @@ def acceleration(r):
         z * (zx - 3)
     ])
 
-    return a_grav + a_j2
+    return a_grav # + a_j2
 
 
 def rk4_step(r, v, dt):

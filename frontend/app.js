@@ -124,6 +124,7 @@ let simTime = 0;
 let activeSats = [];
 let planeRings = [];
 let simSpeed = 1.0;
+let lastRevisitUpdate = -1;
 
 function clearSim() {
     activeSats.forEach(s => {
@@ -172,6 +173,11 @@ function fetchContinuation() {
 function runSim() {
     clearSim();
     simTime = 0;
+
+    for (let i = 0; i < lastSeen.length; i++) {
+        lastSeen[i] = -ALLOW_TIME;
+    }
+    lastRevisitUpdate = -1;
 
     const params = getParams();
     const {planes, spp} = params;
@@ -333,13 +339,133 @@ const NSR_RECT = {
     latMax: 85 * Math.PI / 180
 };
 
+const NSR_NODES = [
+    [33.3408, 69.4038],
+    [59.1565, 76.267],
+    [68.3354, 77.2731],
+    [82.9644, 76.4474],
+    [97.5933, 76.5145],
+    [103.426, 77.9499],
+    [113.943, 77.0179],
+    [119.011, 75.5215],
+    [132.588, 75.6879],
+    [136.221, 76.5145],
+];
+
+function nsrLatAtLon(lonDeg) {
+
+    for (let i = 0; i < NSR_NODES.length - 1; i++) {
+
+        const [x1, y1] = NSR_NODES[i];
+        const [x2, y2] = NSR_NODES[i + 1];
+
+        if (lonDeg >= x1 && lonDeg <= x2) {
+            const t = (lonDeg - x1) / (x2 - x1);
+            return y1 + t * (y2 - y1);
+        }
+    }
+
+    return null;
+}
+
+const revisitGrid = [];
+const lastSeen = [];
+const ALLOW_TIME = 6 * 3600;
+
+for (let lon = 30; lon <= 195; lon += 1) {
+
+    const lat = nsrLatAtLon(lon);
+    if (lat === null) continue;
+
+    const lonRad = lon * Math.PI / 180;
+    const latRad = lat * Math.PI / 180;
+
+    revisitGrid.push({
+        lon: lonRad,
+        lat: latRad,
+
+        // фиксированный вектор точки трассы в земной системе
+        baseVec: [
+            Math.cos(latRad) * Math.cos(lonRad),
+            Math.cos(latRad) * Math.sin(lonRad),
+            Math.sin(latRad)
+        ]
+    });
+
+    lastSeen.push(-1e9);
+}
+
+function vecNorm(r) {
+    return Math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]);
+}
+
+function isPointCoveredBySat(node, satR) {
+
+    const satNorm = vecNorm(satR);
+    const tCheck = simTime + CONST.DT;
+
+    const satUnit = [
+        satR[0]/satNorm,
+        satR[1]/satNorm,
+        satR[2]/satNorm
+    ];
+
+    const th = CONST.OMEGA_EARTH * simTime;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+
+    const bx = node.baseVec[0];
+    const by = node.baseVec[1];
+    const bz = node.baseVec[2];
+
+    const ptUnit = [
+        bx*c - by*s,
+        bx*s + by*c,
+        bz
+    ];
+
+    const dot =
+        satUnit[0]*ptUnit[0] +
+        satUnit[1]*ptUnit[1] +
+        satUnit[2]*ptUnit[2];
+
+    // ---- ТЕКУЩИЙ SWATH ИЗ ПОЛЗУНКА ----
+    const alpha = (parseFloat(document.getElementById("swath").value) * 1000 / 2) / CONST.R_EARTH;
+
+    return dot >= Math.cos(alpha);
+}
+
+function updateRevisitGrid() {
+
+    if (simTime - lastRevisitUpdate < 10) return;
+    lastRevisitUpdate = simTime;
+
+    const tCheck = simTime + CONST.DT;
+
+    revisitGrid.forEach((node, idx) => {
+
+        let covered = false;
+
+        activeSats.forEach(sat => {
+            if (sat.bufStep === 0 || sat.bufStep >= sat.buffer.length) return;
+
+            const satR = sat.buffer[sat.bufStep - 1];
+
+            if (isPointCoveredBySat(node, satR, tCheck)) covered = true;
+        });
+
+        if (covered) lastSeen[idx] = tCheck;
+    });
+}
+
 function mercY(lat) {
     return Math.log(Math.tan(Math.PI / 4 + lat / 2));
 }
 
 function latLonToXY_NSR(lat, lon, w, h) {
 
-    if (lon < 0) lon += 2 * Math.PI;
+    while (lon < 0) lon += 2 * Math.PI;
+    while (lon > 2 * Math.PI) lon -= 2 * Math.PI;
 
     const x = (lon - NSR_RECT.lonMin) / (NSR_RECT.lonMax - NSR_RECT.lonMin) * w;
 
@@ -388,6 +514,30 @@ function updateNSRMap() {
         }
 
         ctxNSR.drawImage(nsrMapImg, sx, sy, sw, sh, 0, 0, w, h);
+
+        ctxNSR.fillStyle = "rgba(0,0,0,0.35)";
+        ctxNSR.fillRect(0, h-100, w, 100);
+
+        const barBase = h;
+        const barMaxH = 100;
+        const bw = w / revisitGrid.length;
+
+        for (let i=0; i<revisitGrid.length; i++) {
+
+            const dt = simTime - lastSeen[i];
+            const remain = Math.max(0, ALLOW_TIME - dt);
+
+            const frac = remain / ALLOW_TIME;
+            const bh = frac * barMaxH;
+
+            const hours = dt / 3600;
+
+            if (hours > 4) ctxNSR.fillStyle = "red";
+            else if (hours > 2) ctxNSR.fillStyle = "yellow";
+            else ctxNSR.fillStyle = "limegreen";
+
+            ctxNSR.fillRect(i*bw, barBase-bh, bw, bh);
+        }
     }
 
     // ---------- рисуем зоны обзора ----------
@@ -406,9 +556,12 @@ function updateNSRMap() {
 
         let started = false;
 
+        let prevLon = null;
+
+        const projPts = [];
+
         pts.forEach(p => {
 
-            // THREE sphere point -> Earth xyz
             const r = [
                 p.x * CONST.R_EARTH,
                 -p.z * CONST.R_EARTH,
@@ -418,15 +571,42 @@ function updateNSRMap() {
             const geo = xyzToLatLon(r, simTime);
             const pt = latLonToXY_NSR(geo.lat, geo.lon, w, h);
 
-            if (!pt) return;
-
-            if (!started) {
-                ctxNSR.moveTo(pt.x, pt.y);
-                started = true;
-            } else {
-                ctxNSR.lineTo(pt.x, pt.y);
-            }
+            if (pt) projPts.push(pt);
         });
+
+        if (projPts.length < 3) return;
+
+// ---- центр полигона ----
+        let cx = 0, cy = 0;
+        projPts.forEach(pt => {
+            cx += pt.x;
+            cy += pt.y;
+        });
+        cx /= projPts.length;
+        cy /= projPts.length;
+
+// ---- сортировка по углу ----
+        projPts.sort((a, b) => {
+            const aa = Math.atan2(a.y - cy, a.x - cx);
+            const bb = Math.atan2(b.y - cy, b.x - cx);
+            return aa - bb;
+        });
+
+// ---- рисование ----
+        ctxNSR.beginPath();
+        ctxNSR.strokeStyle = "rgba(220,0,0,0.55)";
+        ctxNSR.fillStyle = "rgba(220,0,0,0.12)";
+        ctxNSR.lineWidth = 1.0;
+
+        ctxNSR.moveTo(projPts[0].x, projPts[0].y);
+
+        for (let k = 1; k < projPts.length; k++) {
+            ctxNSR.lineTo(projPts[k].x, projPts[k].y);
+        }
+
+        ctxNSR.closePath();
+        ctxNSR.fill();
+        ctxNSR.stroke();
 
         if (started) {
             ctxNSR.closePath();
@@ -517,6 +697,14 @@ function latLonToXY(lat, lon, w, h) {
         x: (lon + Math.PI) / (2 * Math.PI) * w,
         y: (Math.PI / 2 - lat) / Math.PI * h
     };
+}
+
+function unwrapLongitude(prevLon, lon) {
+
+    while (lon - prevLon > Math.PI) lon -= 2 * Math.PI;
+    while (lon - prevLon < -Math.PI) lon += 2 * Math.PI;
+
+    return lon;
 }
 
 // =====================
@@ -671,6 +859,7 @@ function animate() {
         earth.rotation.y += CONST.OMEGA_EARTH * CONST.DT;
     }
 
+    updateRevisitGrid();
     update2D();
     updateNSRMap();
     orbitControls.update();
