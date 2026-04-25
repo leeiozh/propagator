@@ -176,7 +176,9 @@ function runSim() {
 
     for (let i = 0; i < lastSeen.length; i++) {
         lastSeen[i] = -ALLOW_TIME;
+        isCovered[i] = false;
     }
+    maxRevisitTime = 0;
     lastRevisitUpdate = -1;
 
     const params = getParams();
@@ -374,7 +376,9 @@ function nsrLatAtLon(lonDeg) {
 
 const revisitGrid = [];
 const lastSeen = [];
+const isCovered = [];
 const ALLOW_TIME = 6 * 3600;
+let maxRevisitTime = 0;
 
 for (let lon = 30; lon <= 195; lon += 1) {
 
@@ -397,6 +401,7 @@ for (let lon = 30; lon <= 195; lon += 1) {
     });
 
     lastSeen.push(-1e9);
+    isCovered.push(false);
 }
 
 function vecNorm(r) {
@@ -455,6 +460,11 @@ function updateRevisitGrid() {
             if (isPointCoveredBySat(node, satR)) covered = true;
         });
 
+        if (covered && !isCovered[idx] && lastSeen[idx] > -1e8) {
+            const gap = simTime - lastSeen[idx];
+            if (gap > maxRevisitTime) maxRevisitTime = gap;
+        }
+        isCovered[idx] = covered;
         if (covered) lastSeen[idx] = simTime;
     });
 }
@@ -541,6 +551,20 @@ function updateNSRMap() {
 
             const xPos = (node.lon - NSR_RECT.lonMin) / lonRange * w;
             ctxNSR.fillRect(xPos, barBase - bh, barW, bh);
+        }
+
+        // ---------- макс. время пролёта ----------
+        if (maxRevisitTime > 0) {
+            const totalMin = Math.round(maxRevisitTime / 60);
+            const hh = Math.floor(totalMin / 60);
+            const mm = totalMin % 60;
+            const label = `макс. время без покрытия: ${hh}ч ${mm.toString().padStart(2,"0")}м`;
+            ctxNSR.font = "bold 13px monospace";
+            const tw = ctxNSR.measureText(label).width;
+            ctxNSR.fillStyle = "rgba(0,0,0,0.55)";
+            ctxNSR.fillRect(w - tw - 16, 6, tw + 12, 22);
+            ctxNSR.fillStyle = "#ffffff";
+            ctxNSR.fillText(label, w - tw - 10, 22);
         }
     }
 

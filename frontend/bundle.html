@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Satellite Simulator</title>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+
+<style>
+body { margin:0; overflow:hidden; background:#0a0a0f; color:#ccc; font-family:monospace;}
+#root { display:flex; height:100vh; }
+
+#left  {
+  width:50vw;
+  height:100vh;
+  position:relative;
+  overflow:hidden; }
+#right {
+  width:50vw;
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+  border-left:1px solid #333;
+}
+
+#top2d, #bottom {
+  width:100%;
+  height:50%;
+  position:relative;
+  overflow:hidden;
+}
+
+#top2d canvas, #bottom canvas {
+  display:block;
+  width:100%;
+  height:100%;
+}
+
+#panel {
+  position:absolute;
+  top:10px; left:10px;
+  background:#111;
+  padding:12px;
+  border:1px solid #333;
+  z-index:10;
+}
+
+label { display:block; margin-top:8px; }
+.value { color:#6eb5ff; float:right; }
+#orbitWarn {
+  margin-top: 6px; padding: 3px 6px;
+  font-size: 0.85em; border-radius: 3px;
+}
+#orbitWarn.warn  { background: #3a2000; color: #ffaa00; }
+#orbitWarn.error { background: #3a0000; color: #ff4444; }
+input.num-input {
+  width: 52px; text-align: right;
+  background: transparent; border: none;
+  border-bottom: 1px solid #444;
+  color: #6eb5ff; font-family: monospace; font-size: inherit;
+  padding: 0; outline: none; float: right; margin-left: 4px;
+}
+input.num-input:focus { border-bottom-color: #6eb5ff; background: #1a1a2e; }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { display: none; }
+input[type=number] { -moz-appearance: textfield; }
+</style>
+</head>
+
+<body>
+<div id="root">
+
+  <div id="left">
+    <div id="panel">
+
+      <button onclick="runSim()">Run</button>
+
+      <label>
+        a, km
+        <span id="smaVal" class="value"></span>
+        <input id="sma" type="range" min="6500" max="42200" step="10" value="6778">
+      </label>
+      <div style="font-size:0.8em; color:#888; margin-top:2px; display:flex; justify-content:space-between;">
+        <span id="periLabel">Перигей: —</span>
+        <span id="apoLabel">Апогей: —</span>
+      </div>
+
+      <label>
+        Inclination
+        <span id="incVal" class="value"></span>
+        <input id="inc" type="range" min="0" max="180" value="90">
+      </label>
+
+      <label>
+        Eccentricity
+        <span id="eccVal" class="value"></span>
+        <input id="ecc" type="range" min="0" max="0.99" step="0.01" value="0">
+      </label>
+
+      <div id="orbitWarn"></div>
+
+      <label>
+        Planes
+        <span id="planesVal" class="value"></span>
+        <input id="planes" type="range" min="1" max="10" value="3">
+      </label>
+
+      <label>
+        Sats/Plane
+        <span id="sppVal" class="value"></span>
+        <input id="spp" type="range" min="1" max="10" value="2">
+      </label>
+
+      <label>
+        Swath, km
+        <span id="swathVal" class="value"></span>
+        <input id="swath" type="range" min="10" max="500" value="250">
+      </label>
+
+      <label>
+        Speed
+        <span id="speedVal" class="value">1.0x</span>
+        <input id="speed" type="range" min="0.1" max="5" step="0.05" value="1">
+      </label>
+
+    </div>
+  </div>
+
+  <div id="right">
+    <div id="top2d"></div>
+    <div id="bottom"></div>
+  </div>
+
+</div>
+
+<div id="timeLabel" style="position:absolute; top:10px; right:10px; color:white;"></div>
+<div id="coordLabel" style="position:absolute; top:10px; right:570px; color:white;"></div>
+
+<script>
+// =====================
+// CONTROLS
+// =====================
+function initControls() {
+    function bind(id) {
+        const slider = document.getElementById(id);
+        const span   = document.getElementById(id + "Val");
+
+        const ni = document.createElement("input");
+        ni.type      = "number";
+        ni.min       = slider.min;
+        ni.max       = slider.max;
+        ni.step      = slider.step || "1";
+        ni.className = "value num-input";
+        span.replaceWith(ni);
+
+        const fromSlider = () => { ni.value = parseFloat(slider.value); };
+
+        const fromNum = () => {
+            let v = parseFloat(ni.value);
+            if (isNaN(v)) { fromSlider(); return; }
+            v = Math.max(parseFloat(slider.min), Math.min(parseFloat(slider.max), v));
+            ni.value     = v;
+            slider.value = v;
+            slider.dispatchEvent(new Event("input"));
+        };
+
+        slider.addEventListener("input", fromSlider);
+        ni.addEventListener("change",  fromNum);
+        ni.addEventListener("keydown", e => { if (e.key === "Enter") fromNum(); });
+        fromSlider();
+    }
+
+    bind("sma"); bind("inc"); bind("ecc");
+    bind("planes"); bind("spp"); bind("swath"); bind("speed");
+
+    function checkOrbit() {
+        const a_km = parseFloat(document.getElementById("sma").value);
+        const e    = parseFloat(document.getElementById("ecc").value);
+        const h_km = a_km * (1 - e) - 6378.137;
+
+        document.getElementById("periLabel").textContent = `Перигей: ${h_km.toFixed(0)} км`;
+        document.getElementById("apoLabel").textContent  =
+            `Апогей: ${(a_km * (1 + e) - 6378.137).toFixed(0)} км`;
+
+        const warn = document.getElementById("orbitWarn");
+        if (h_km < 0) {
+            warn.className   = "error";
+            warn.textContent = "⚠ Перигей ниже поверхности Земли";
+        } else if (h_km < 100) {
+            warn.className   = "warn";
+            warn.textContent = "⚠ Перигей в атмосфере — орбита нестабильна";
+        } else {
+            warn.className   = "";
+            warn.textContent = "";
+        }
+    }
+
+    ["sma", "ecc"].forEach(id =>
+        document.getElementById(id).addEventListener("input", checkOrbit)
+    );
+    checkOrbit();
+}
+
+function getParams() {
+    return {
+        a:      parseFloat(document.getElementById("sma").value) * 1000,
+        e:      parseFloat(document.getElementById("ecc").value),
+        i:      parseFloat(document.getElementById("inc").value) * Math.PI / 180,
+        planes: parseInt(document.getElementById("planes").value),
+        spp:    parseInt(document.getElementById("spp").value),
+        swath:  parseInt(document.getElementById("swath").value)
+    };
+}
+
+// Walker T:P:1
+function generateConstellation(planes, spp) {
+    const sats = [];
+    for (let p = 0; p < planes; p++) {
+        const raan = 2 * Math.PI * p / planes;
+        for (let s = 0; s < spp; s++) {
+            sats.push({ raan, nu: 2 * Math.PI * s / spp, planeIdx: p });
+        }
+    }
+    return sats;
+}
+
+document.addEventListener("DOMContentLoaded", initControls);
+</script>
+
+<script>
+// =====================
+// APP
+// =====================
+const CONST = {
+    R_EARTH: 6378137,
+    SCALE: 1 / 6378137,
+    SAT_SIZE: 0.022,
+    OMEGA_EARTH: 7.2921159e-5,
+    DT: 10,
+    SIM_SPEED: 1.0
+};
+
+const TRAIL_LEN = 900;
+const PREFETCH  = 200;
+
+// =====================
+// THREE.JS СЦЕНА
+// =====================
+const leftEl = document.getElementById("left");
+
+const camera = new THREE.PerspectiveCamera(
+    60, leftEl.clientWidth / leftEl.clientHeight, 0.1, 1000
+);
+camera.position.set(0, -3, 2);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(leftEl.clientWidth, leftEl.clientHeight);
+leftEl.appendChild(renderer.domElement);
+
+window.addEventListener("resize", () => {
+    const w = leftEl.clientWidth, h = leftEl.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+});
+
+const orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(5, 2, 3);
+scene.add(sun);
+
+// Земля — цвет-заглушка на случай если текстура не загрузится
+const earthMat = new THREE.MeshPhongMaterial({ color: 0x2255aa, shininess: 15 });
+const loader = new THREE.TextureLoader();
+loader.load(
+    "earth.jpg",
+    tex => { earthMat.map = tex; earthMat.color.set(0xffffff); earthMat.needsUpdate = true; },
+    undefined,
+    ()  => console.warn("earth.jpg не загрузилась, показываю синий шар")
+);
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), earthMat);
+scene.add(earth);
+
+scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, -1.6, 0),
+        new THREE.Vector3(0,  1.6, 0)
+    ]),
+    new THREE.LineBasicMaterial({ color: 0xffcc00 })
+));
+
+// =====================
+// ВСПОМОГАТЕЛЬНОЕ
+// =====================
+function eciToThree(r) {
+    return new THREE.Vector3(r[0] * CONST.SCALE, r[2] * CONST.SCALE, -r[1] * CONST.SCALE);
+}
+
+function planeColor(planeIdx, nPlanes) {
+    const c = new THREE.Color();
+    c.setHSL(planeIdx / nPlanes, 0.9, 0.55);
+    return c;
+}
+
+function updateCoverageRect(mesh, satPos, prevPos) {
+    const swathKm = parseFloat(document.getElementById("swath").value);
+    const R_E_KM  = CONST.R_EARTH / 1000;
+    const nadir   = satPos.clone().normalize();
+
+    let along = new THREE.Vector3(0, 1, 0);
+    if (prevPos && satPos.distanceTo(prevPos) > 1e-10)
+        along = satPos.clone().sub(prevPos);
+    along.sub(nadir.clone().multiplyScalar(along.dot(nadir)));
+    if (along.length() < 1e-10) {
+        along = new THREE.Vector3(1, 0, 0);
+        along.sub(nadir.clone().multiplyScalar(along.dot(nadir)));
+    }
+    along.normalize();
+
+    const cross  = nadir.clone().cross(along).normalize();
+    const halfCT = (swathKm / 2) / R_E_KM;
+    const halfAT = halfCT;
+    const N = 16;
+    const pts = [];
+
+    function pt(ctF, atF) {
+        return nadir.clone()
+            .add(cross.clone().multiplyScalar(ctF * halfCT))
+            .add(along.clone().multiplyScalar(atF * halfAT))
+            .normalize();
+    }
+
+    for (let k = 0; k < N; k++)     pts.push(pt(-1 + 2 * k / (N - 1),  1));
+    for (let k = 1; k < N; k++)     pts.push(pt( 1, 1 - 2 * k / (N - 1)));
+    for (let k = 1; k < N; k++)     pts.push(pt( 1 - 2 * k / (N - 1), -1));
+    for (let k = 1; k < N - 1; k++) pts.push(pt(-1, -1 + 2 * k / (N - 1)));
+
+    mesh.geometry.setFromPoints(pts);
+    mesh._coveragePoints = pts;
+}
+
+// =====================
+// СОСТОЯНИЕ
+// =====================
+let simTime = 0;
+let activeSats = [];
+let planeRings = [];
+let simSpeed = 1.0;
+let lastRevisitUpdate = -1;
+
+function clearSim() {
+    activeSats.forEach(s => {
+        scene.remove(s.mesh);
+        scene.remove(s.trailLine);
+        scene.remove(s.coverageMesh);
+    });
+    planeRings.forEach(r => scene.remove(r));
+    activeSats = [];
+    planeRings = [];
+}
+
+// =====================
+// ДОЗАПРОС К БЭКЕНДУ
+// =====================
+function fetchContinuation() {
+    if (activeSats.length === 0) return;
+
+    fetch("http://127.0.0.1:8000/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            satellites: activeSats.map(sat => ({ r0: sat.lastR, v0: sat.lastV }))
+        })
+    })
+        .then(r => r.json())
+        .then(data => {
+            data.trajectories.forEach(({ positions, final_v }, idx) => {
+                const sat = activeSats[idx];
+                if (!sat) return;
+                sat.buffer.push(...positions);
+                sat.lastV = final_v;
+                sat.lastR = positions[positions.length - 1];
+                sat.fetching = false;
+            });
+        });
+}
+
+// =====================
+// ЗАПУСК
+// =====================
+function runSim() {
+    clearSim();
+    simTime = 0;
+
+    for (let i = 0; i < lastSeen.length; i++) {
+        lastSeen[i]  = -1e9;
+        isCovered[i] = false;
+    }
+    maxRevisitTime    = 0;
+    lastRevisitUpdate = -1;
+
+    const params        = getParams();
+    const { planes, spp } = params;
+    const constellation = generateConstellation(planes, spp);
+
+    fetch("http://127.0.0.1:8000/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            a: params.a, e: params.e, i: params.i,
+            satellites: constellation.map(s => ({ raan: s.raan, nu: s.nu }))
+        })
+    })
+        .then(r => r.json())
+        .then(data => {
+            (data.rings || []).forEach((ringPts, p) => {
+                const color = planeColor(p, planes);
+                const ring  = new THREE.LineLoop(
+                    new THREE.BufferGeometry().setFromPoints(ringPts.map(r => eciToThree(r))),
+                    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.25 })
+                );
+                scene.add(ring);
+                planeRings.push(ring);
+            });
+
+            data.trajectories.forEach(({ positions, final_v }, idx) => {
+                const { planeIdx } = constellation[idx];
+                const color = planeColor(planeIdx, planes);
+
+                const mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(CONST.SAT_SIZE, 8, 8),
+                    new THREE.MeshBasicMaterial({ color })
+                );
+                scene.add(mesh);
+
+                const trailBuf = new Float32Array(TRAIL_LEN * 3);
+                const trailGeo = new THREE.BufferGeometry();
+                trailGeo.setAttribute("position", new THREE.BufferAttribute(trailBuf, 3));
+                trailGeo.setDrawRange(0, 0);
+                const trailLine = new THREE.Line(
+                    trailGeo,
+                    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 })
+                );
+                scene.add(trailLine);
+
+                const coverageMesh = new THREE.LineLoop(
+                    new THREE.BufferGeometry(),
+                    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 })
+                );
+                scene.add(coverageMesh);
+
+                activeSats.push({
+                    buffer: positions, bufStep: 0,
+                    lastR: positions[positions.length - 1], lastV: final_v,
+                    fetching: false, trail: [],
+                    planeIdx, color, mesh, trailLine, coverageMesh
+                });
+            });
+        });
+}
+
+// =====================
+// АНИМАЦИЯ 3D
+// =====================
+function update3D() {
+    if (activeSats.length > 0) {
+        const s0 = activeSats[0];
+        if (!s0.fetching && s0.buffer.length - s0.bufStep <= PREFETCH) {
+            activeSats.forEach(s => s.fetching = true);
+            fetchContinuation();
+        }
+    }
+
+    activeSats.forEach(sat => {
+        if (sat.bufStep >= sat.buffer.length) return;
+        const r = sat.buffer[sat.bufStep];
+        if (!r || !isFinite(r[0]) || !isFinite(r[1]) || !isFinite(r[2])) return;
+        sat.bufStep++;
+
+        if (sat.bufStep > 4000) { sat.buffer.splice(0, sat.bufStep); sat.bufStep = 0; }
+
+        sat.trail.push({ r, t: simTime });
+        if (sat.trail.length > TRAIL_LEN) sat.trail.shift();
+
+        const pos3 = eciToThree(r);
+        sat.mesh.position.copy(pos3);
+
+        const buf = sat.trailLine.geometry.attributes.position.array;
+        sat.trail.forEach(({ r: tr }, j) => {
+            buf[j * 3]     = tr[0] * CONST.SCALE;
+            buf[j * 3 + 1] = tr[2] * CONST.SCALE;
+            buf[j * 3 + 2] = -tr[1] * CONST.SCALE;
+        });
+        sat.trailLine.geometry.attributes.position.needsUpdate = true;
+        sat.trailLine.geometry.setDrawRange(0, sat.trail.length);
+
+        updateCoverageRect(sat.coverageMesh, pos3, sat.prevPos || null);
+        sat.prevPos = pos3.clone();
+    });
+}
+
+// =====================
+// 2D КАРТА
+// =====================
+const container2d  = document.getElementById("top2d");
+const canvas2d     = document.createElement("canvas");
+container2d.appendChild(canvas2d);
+const ctx = canvas2d.getContext("2d");
+
+const containerNSR = document.getElementById("bottom");
+const canvasNSR    = document.createElement("canvas");
+containerNSR.appendChild(canvasNSR);
+const ctxNSR = canvasNSR.getContext("2d");
+
+function resizeNSR() {
+    const dpr = window.devicePixelRatio || 1;
+    const w   = containerNSR.clientWidth;
+    const h   = containerNSR.clientHeight;
+    canvasNSR.width  = w * dpr;
+    canvasNSR.height = h * dpr;
+    canvasNSR.style.width  = w + "px";
+    canvasNSR.style.height = h + "px";
+    ctxNSR.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+setTimeout(resizeNSR, 100);
+window.addEventListener("resize", resizeNSR);
+
+function resize2D() {
+    canvas2d.width  = container2d.clientWidth;
+    canvas2d.height = container2d.clientHeight;
+}
+setTimeout(resize2D, 100);
+window.addEventListener("resize", resize2D);
+
+// =====================
+// СМП — сетка и гистограмма
+// =====================
+const NSR_RECT = {
+    lonMin: 30  * Math.PI / 180,
+    lonMax: 195 * Math.PI / 180,
+    latMin: 60  * Math.PI / 180,
+    latMax: 85  * Math.PI / 180
+};
+
+const NSR_NODES = [
+    [33.3408, 69.4038], [59.1565, 76.267],  [68.3354, 77.2731],
+    [82.9644, 76.4474], [97.5933, 76.5145], [103.426, 77.9499],
+    [113.943, 77.0179], [119.011, 75.5215], [132.588, 75.6879],
+    [136.221, 76.5145], [148.0,   73.5],    [170.27,  69.70],
+    [191.1,   65.80],   [195.0,   64.8],
+];
+
+function nsrLatAtLon(lonDeg) {
+    for (let i = 0; i < NSR_NODES.length - 1; i++) {
+        const [x1, y1] = NSR_NODES[i];
+        const [x2, y2] = NSR_NODES[i + 1];
+        if (lonDeg >= x1 && lonDeg <= x2)
+            return y1 + (lonDeg - x1) / (x2 - x1) * (y2 - y1);
+    }
+    return null;
+}
+
+const revisitGrid = [];
+const lastSeen    = [];
+const isCovered   = [];
+const ALLOW_TIME  = 6 * 3600;
+let   maxRevisitTime = 0;
+
+for (let lon = 30; lon <= 195; lon += 1) {
+    const lat = nsrLatAtLon(lon);
+    if (lat === null) continue;
+    const lonRad = lon * Math.PI / 180;
+    const latRad = lat * Math.PI / 180;
+    revisitGrid.push({
+        lon: lonRad, lat: latRad,
+        baseVec: [
+            Math.cos(latRad) * Math.cos(lonRad),
+            Math.cos(latRad) * Math.sin(lonRad),
+            Math.sin(latRad)
+        ]
+    });
+    lastSeen.push(-1e9);
+    isCovered.push(false);
+}
+
+function vecNorm(r) { return Math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]); }
+
+function isPointCoveredBySat(node, satR) {
+    const satNorm  = vecNorm(satR);
+    const satUnit  = [satR[0]/satNorm, satR[1]/satNorm, satR[2]/satNorm];
+    const th = CONST.OMEGA_EARTH * simTime;
+    const c = Math.cos(th), s = Math.sin(th);
+    const [bx, by, bz] = node.baseVec;
+    const ptUnit = [bx*c - by*s, bx*s + by*c, bz];
+    const dot    = satUnit[0]*ptUnit[0] + satUnit[1]*ptUnit[1] + satUnit[2]*ptUnit[2];
+    const alpha  = (parseFloat(document.getElementById("swath").value) * 1000 / 2) / CONST.R_EARTH;
+    return dot >= Math.cos(alpha);
+}
+
+function updateRevisitGrid() {
+    if (simTime - lastRevisitUpdate < 10) return;
+    lastRevisitUpdate = simTime;
+
+    revisitGrid.forEach((node, idx) => {
+        let covered = false;
+        activeSats.forEach(sat => {
+            if (sat.bufStep === 0 || sat.bufStep >= sat.buffer.length) return;
+            if (isPointCoveredBySat(node, sat.buffer[sat.bufStep - 1])) covered = true;
+        });
+
+        if (covered && !isCovered[idx] && lastSeen[idx] > -1e8) {
+            const gap = simTime - lastSeen[idx];
+            if (gap > maxRevisitTime) maxRevisitTime = gap;
+        }
+        isCovered[idx] = covered;
+        if (covered) lastSeen[idx] = simTime;
+    });
+}
+
+// =====================
+// ВСПОМОГАТЕЛЬНЫЕ ДЛЯ КАРТ
+// =====================
+function xyzToLatLon(r, t) {
+    const rn = Math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]);
+    let lon   = Math.atan2(r[1], r[0]) - CONST.OMEGA_EARTH * t;
+    while (lon >  Math.PI) lon -= 2 * Math.PI;
+    while (lon < -Math.PI) lon += 2 * Math.PI;
+    return { lat: Math.asin(r[2] / rn), lon };
+}
+
+function latLonToXY(lat, lon, w, h) {
+    return {
+        x: (lon + Math.PI) / (2 * Math.PI) * w,
+        y: (Math.PI / 2 - lat) / Math.PI * h
+    };
+}
+
+function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat / 2)); }
+
+function latLonToXY_NSR(lat, lon, w, h) {
+    while (lon < 0)           lon += 2 * Math.PI;
+    while (lon > 2 * Math.PI) lon -= 2 * Math.PI;
+    const x    = (lon - NSR_RECT.lonMin) / (NSR_RECT.lonMax - NSR_RECT.lonMin) * w;
+    const yMin = mercY(NSR_RECT.latMin), yMax = mercY(NSR_RECT.latMax);
+    const y    = (yMax - mercY(lat)) / (yMax - yMin) * h;
+    return { x, y };
+}
+
+// =====================
+// NSR MAP
+// =====================
+const nsrMapImg = new Image();
+nsrMapImg.src   = "nsr_map.png?v=5";
+
+function updateNSRMap() {
+    const dpr = window.devicePixelRatio || 1;
+    const w   = canvasNSR.width  / dpr;
+    const h   = canvasNSR.height / dpr;
+
+    ctxNSR.clearRect(0, 0, w, h);
+
+    if (nsrMapImg.naturalWidth > 0) {
+        const iW = nsrMapImg.naturalWidth, iH = nsrMapImg.naturalHeight;
+        const iA = iW / iH, cA = w / h;
+        let sx = 0, sy = 0, sw = iW, sh = iH;
+        if (iA > cA) { sw = iH * cA; sx = (iW - sw) / 2; }
+        else         { sh = iW / cA; sy = (iH - sh) / 2; }
+        ctxNSR.drawImage(nsrMapImg, sx, sy, sw, sh, 0, 0, w, h);
+    }
+
+    // ---------- гистограмма ----------
+    ctxNSR.fillStyle = "rgba(0,0,0,0.35)";
+    ctxNSR.fillRect(0, h - 100, w, 100);
+
+    const lonRange = NSR_RECT.lonMax - NSR_RECT.lonMin;
+    const barW     = Math.max(1, (Math.PI / 180) / lonRange * w);
+
+    for (let i = 0; i < revisitGrid.length; i++) {
+        const node   = revisitGrid[i];
+        const dt     = simTime - lastSeen[i];
+        const frac   = Math.min(1, Math.max(0, (ALLOW_TIME - dt) / ALLOW_TIME));
+        const bh     = frac * 100;
+        const hours  = dt / 3600;
+
+        ctxNSR.fillStyle = hours > 4 ? "red" : hours > 2 ? "yellow" : "limegreen";
+        const xPos = (node.lon - NSR_RECT.lonMin) / lonRange * w;
+        ctxNSR.fillRect(xPos, h - bh, barW, bh);
+    }
+
+    // ---------- макс. время без покрытия ----------
+    if (maxRevisitTime > 0) {
+        const totalMin = Math.round(maxRevisitTime / 60);
+        const hh = Math.floor(totalMin / 60);
+        const mm = totalMin % 60;
+        const label = `макс. время без покрытия: ${hh}ч ${mm.toString().padStart(2, "0")}м`;
+        ctxNSR.font = "bold 13px monospace";
+        const tw = ctxNSR.measureText(label).width;
+        ctxNSR.fillStyle = "rgba(0,0,0,0.55)";
+        ctxNSR.fillRect(w - tw - 16, 6, tw + 12, 22);
+        ctxNSR.fillStyle = "#ffffff";
+        ctxNSR.fillText(label, w - tw - 10, 22);
+    }
+
+    // ---------- зоны обзора на карте СМП ----------
+    activeSats.forEach(sat => {
+        if (!sat.coverageMesh || !sat.coverageMesh._coveragePoints) return;
+        const pts = sat.coverageMesh._coveragePoints;
+        if (pts.length < 3) return;
+
+        const projPts = pts.map(p => {
+            const r = [p.x * CONST.R_EARTH, -p.z * CONST.R_EARTH, p.y * CONST.R_EARTH];
+            return latLonToXY_NSR(xyzToLatLon(r, simTime).lat,
+                                  xyzToLatLon(r, simTime).lon, w, h);
+        });
+
+        let cx = 0, cy = 0;
+        projPts.forEach(p => { cx += p.x; cy += p.y; });
+        cx /= projPts.length; cy /= projPts.length;
+        projPts.sort((a, b) =>
+            Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
+        );
+
+        ctxNSR.beginPath();
+        ctxNSR.moveTo(projPts[0].x, projPts[0].y);
+        for (let k = 1; k < projPts.length; k++) ctxNSR.lineTo(projPts[k].x, projPts[k].y);
+        ctxNSR.closePath();
+        ctxNSR.fillStyle   = "rgba(220,0,0,0.12)";
+        ctxNSR.strokeStyle = "rgba(220,0,0,0.55)";
+        ctxNSR.lineWidth   = 1.0;
+        ctxNSR.fill();
+        ctxNSR.stroke();
+    });
+}
+
+// =====================
+// 2D МИРОВАЯ КАРТА
+// =====================
+const worldMapImg = new Image();
+worldMapImg.src   = "worldmap.jpg";
+
+function drawMapBackground(w, h) {
+    if (worldMapImg.complete && worldMapImg.naturalWidth > 0)
+        ctx.drawImage(worldMapImg, 0, 0, w, h);
+    else { ctx.fillStyle = "#0a1a2e"; ctx.fillRect(0, 0, w, h); }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth   = 0.5;
+    for (let k = 0; k <= 6; k++) {
+        const x = k * w / 6;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    for (let k = 0; k <= 4; k++) {
+        const y = k * h / 4;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+}
+
+canvas2d.addEventListener("mousemove", e => {
+    const rect = canvas2d.getBoundingClientRect();
+    const lon  = ((e.clientX - rect.left) / canvas2d.width)  * 2 * Math.PI - Math.PI;
+    const lat  = Math.PI / 2 - ((e.clientY - rect.top) / canvas2d.height) * Math.PI;
+    document.getElementById("coordLabel").innerText =
+        `lat ${(lat * 180 / Math.PI).toFixed(1)}°, lon ${(lon * 180 / Math.PI).toFixed(1)}°`;
+});
+
+function update2D() {
+    const w = canvas2d.width, h = canvas2d.height;
+    ctx.clearRect(0, 0, w, h);
+    drawMapBackground(w, h);
+
+    activeSats.forEach(sat => {
+        const css = "#" + sat.color.getHexString();
+        ctx.strokeStyle = css;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+
+        let penDown = false, prevLon = null;
+        sat.trail.forEach(({ r, t }) => {
+            const { lat, lon } = xyzToLatLon(r, t);
+            const { x, y }    = latLonToXY(lat, lon, w, h);
+            if (penDown && Math.abs(lon - prevLon) > Math.PI) {
+                ctx.stroke(); ctx.beginPath(); penDown = false;
+            }
+            penDown ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+            penDown = true; prevLon = lon;
+        });
+        ctx.stroke();
+
+        const cur = sat.trail[sat.trail.length - 1];
+        if (cur) {
+            const { lat, lon } = xyzToLatLon(cur.r, cur.t);
+            const { x, y }    = latLonToXY(lat, lon, w, h);
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle   = css;
+            ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
+        }
+    });
+
+    activeSats.forEach(sat => {
+        if (!sat.coverageMesh._coveragePoints) return;
+        const cur = sat.trail[sat.trail.length - 1];
+        if (!cur) return;
+
+        const css             = "#" + sat.color.getHexString();
+        const { lon: refLon } = xyzToLatLon(cur.r, cur.t);
+
+        const mapPts = sat.coverageMesh._coveragePoints.map(p => {
+            const r = [p.x * CONST.R_EARTH, -p.z * CONST.R_EARTH, p.y * CONST.R_EARTH];
+            const { lat, lon: rawLon } = xyzToLatLon(r, simTime);
+            let d = rawLon - refLon;
+            while (d >  Math.PI) d -= 2 * Math.PI;
+            while (d < -Math.PI) d += 2 * Math.PI;
+            return latLonToXY(lat, refLon + d, w, h);
+        });
+
+        ctx.beginPath();
+        ctx.moveTo(mapPts[0].x, mapPts[0].y);
+        for (let k = 1; k < mapPts.length; k++) ctx.lineTo(mapPts[k].x, mapPts[k].y);
+        ctx.closePath();
+        ctx.globalAlpha = 0.15; ctx.fillStyle   = css; ctx.fill();
+        ctx.globalAlpha = 0.65; ctx.strokeStyle = css; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+
+    ctx.globalAlpha = 1.0;
+}
+
+// =====================
+// ГЛАВНЫЙ LOOP
+// =====================
+function animate() {
+    requestAnimationFrame(animate);
+
+    simSpeed = parseFloat(document.getElementById("speed").value);
+    const stepsPerFrame = Math.max(1, Math.floor(simSpeed));
+
+    for (let k = 0; k < stepsPerFrame; k++) {
+        update3D();
+        simTime += CONST.DT;
+        earth.rotation.y += CONST.OMEGA_EARTH * CONST.DT;
+    }
+
+    updateRevisitGrid();
+    update2D();
+    updateNSRMap();
+    orbitControls.update();
+    renderer.render(scene, camera);
+    document.getElementById("timeLabel").innerText = `${simTime.toFixed(0)} s`;
+}
+
+animate();
+</script>
+</body>
+</html>
