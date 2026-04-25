@@ -73,34 +73,49 @@ function planeColor(planeIdx, nPlanes) {
     return c;
 }
 
-function updateCoverageMesh(mesh, satPos) {
-const theta = parseFloat(document.getElementById("fov").value) * Math.PI/180;
+// Прямоугольный свайт (Sentinel-1A IW: 250 км поперёк трека, надирное наведение)
+function updateCoverageRect(mesh, satPos, prevPos) {
+    const swathKm = parseFloat(document.getElementById("swath").value);
+    const R_E_KM  = CONST.R_EARTH / 1000;
 
-    const r_s = satPos.length(); // в нормированных единицах (R=1)
-    const R   = 1.0;
+    const nadir = satPos.clone().normalize();
 
-    // геометрия конуса от надира
-    let psi = Math.asin(Math.min(1, (r_s / R) * Math.sin(theta)));
-
-    // ограничение горизонтом
-    const psi_max = Math.acos(R / r_s);
-    psi = Math.min(psi, psi_max);
-
-    const n = satPos.clone().normalize();
-    let u = new THREE.Vector3(0, 1, 0).cross(n);
-    if (u.length() < 1e-6) u = new THREE.Vector3(1, 0, 0);
-    u.normalize();
-    const v = n.clone().cross(u);
-    const pts = [];
-    for (let k = 0; k < 64; k++) {
-        const phi = 2 * Math.PI * k / 64;
-        pts.push(
-            n.clone().multiplyScalar(Math.cos(psi))
-             .add(u.clone().multiplyScalar(Math.sin(psi) * Math.cos(phi)))
-             .add(v.clone().multiplyScalar(Math.sin(psi) * Math.sin(phi)))
-             .normalize()
-        );
+    // Вдоль-трековое направление — из предыдущей позиции
+    let along = new THREE.Vector3(0, 1, 0);
+    if (prevPos && satPos.distanceTo(prevPos) > 1e-10) {
+        along = satPos.clone().sub(prevPos);
     }
+    // Убираем компоненту вдоль надира (проецируем на касательную плоскость)
+    along.sub(nadir.clone().multiplyScalar(along.dot(nadir)));
+    if (along.length() < 1e-10) {
+        along = new THREE.Vector3(1, 0, 0);
+        along.sub(nadir.clone().multiplyScalar(along.dot(nadir)));
+    }
+    along.normalize();
+
+    // Поперёк-трековое направление
+    const cross = nadir.clone().cross(along).normalize();
+
+    // Полу-углы в радианах (малоугловое приближение: d/R)
+    const halfCT = (swathKm / 2) / R_E_KM;
+    const halfAT = (swathKm / 2) / R_E_KM;
+
+    const N = 16;
+    const pts = [];
+
+    function pt(ctF, atF) {
+        return nadir.clone()
+            .add(cross.clone().multiplyScalar(ctF * halfCT))
+            .add(along.clone().multiplyScalar(atF * halfAT))
+            .normalize();
+    }
+
+    // Четыре стороны прямоугольника
+    for (let k = 0; k < N; k++)     pts.push(pt(-1 + 2*k/(N-1),  1)); // верх
+    for (let k = 1; k < N; k++)     pts.push(pt( 1,  1 - 2*k/(N-1))); // право
+    for (let k = 1; k < N; k++)     pts.push(pt( 1 - 2*k/(N-1), -1)); // низ
+    for (let k = 1; k < N-1; k++)   pts.push(pt(-1, -1 + 2*k/(N-1))); // лево
+
     mesh.geometry.setFromPoints(pts);
     mesh._coveragePoints = pts;
 }
@@ -272,7 +287,8 @@ function update3D() {
         sat.trailLine.geometry.attributes.position.needsUpdate = true;
         sat.trailLine.geometry.setDrawRange(0, sat.trail.length);
 
-        updateCoverageMesh(sat.coverageMesh, pos3);
+        updateCoverageRect(sat.coverageMesh, pos3, sat.prevPos || null);
+        sat.prevPos = pos3.clone();
     });
 }
 
@@ -341,10 +357,63 @@ function latLonToXY(lat, lon, w, h) {
     };
 }
 
+// =====================
+// СЕВЕРНЫЙ МОРСКОЙ ПУТЬ
+// =====================
+const NSR_WAYPOINTS = [
+    { name: "Мурманск",        lat: 68.97, lon:  33.08 },
+    { name: "Архангельск",     lat: 64.54, lon:  40.52 },
+    { name: "Карские ворота",  lat: 70.30, lon:  57.70 },
+    { name: "Диксон",          lat: 73.51, lon:  80.55 },
+    { name: "Дудинка",         lat: 69.39, lon:  86.18 },
+    { name: "Хатанга",         lat: 71.98, lon: 102.45 },
+    { name: "Тикси",           lat: 71.64, lon: 128.87 },
+    { name: "Певек",           lat: 69.70, lon: 170.27 },
+    { name: "Берингов пролив", lat: 65.80, lon:-168.90 },
+].map(p => ({ name: p.name, lat: p.lat * Math.PI/180, lon: p.lon * Math.PI/180 }));
+
+function drawNSR(w, h) {
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#ff6600";
+    ctx.fillStyle   = "#ff6600";
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([5, 3]);
+
+    // Линия маршрута; разрыв на антимеридиане
+    ctx.beginPath();
+    let prevLon = null;
+    NSR_WAYPOINTS.forEach(p => {
+        const { x, y } = latLonToXY(p.lat, p.lon, w, h);
+        if (prevLon !== null && Math.abs(p.lon - prevLon) > Math.PI) {
+            ctx.stroke(); ctx.beginPath(); ctx.moveTo(x, y);
+        } else if (prevLon === null) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+        prevLon = p.lon;
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Точки и подписи
+    ctx.font = "9px monospace";
+    NSR_WAYPOINTS.forEach(p => {
+        const { x, y } = latLonToXY(p.lat, p.lon, w, h);
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillText(p.name, x + 5, y - 3);
+    });
+    ctx.restore();
+}
+
 function update2D() {
     const w = canvas2d.width, h = canvas2d.height;
     ctx.clearRect(0, 0, w, h);
     drawMapBackground(w, h);
+    drawNSR(w, h);
 
     activeSats.forEach(sat => {
         const css = "#" + sat.color.getHexString();
@@ -377,42 +446,45 @@ function update2D() {
         }
     });
 
+    // Покрытие — прямоугольная полоса
     activeSats.forEach(sat => {
+        if (!sat.coverageMesh._coveragePoints) return;
+        const cur = sat.trail[sat.trail.length - 1];
+        if (!cur) return;
 
-    if (!sat.coverageMesh._coveragePoints) return;
+        const css = "#" + sat.color.getHexString();
 
-    const css = "#" + sat.color.getHexString();
+        // Опорная долгота спутника — нормализуем остальные точки относительно неё,
+        // чтобы прямоугольник не разрывался на антимеридиане
+        const { lon: refLon } = xyzToLatLon(cur.r, cur.t);
 
-    ctx.strokeStyle = css;
-    ctx.globalAlpha = 0.4;
-    ctx.beginPath();
+        const mapPts = sat.coverageMesh._coveragePoints.map(p => {
+            const r = [
+                p.x * CONST.R_EARTH,
+                -p.z * CONST.R_EARTH,
+                p.y * CONST.R_EARTH
+            ];
+            const { lat, lon: rawLon } = xyzToLatLon(r, simTime);
+            let d = rawLon - refLon;
+            while (d >  Math.PI) d -= 2 * Math.PI;
+            while (d < -Math.PI) d += 2 * Math.PI;
+            return latLonToXY(lat, refLon + d, w, h);
+        });
 
-    let first = true;
+        ctx.beginPath();
+        ctx.moveTo(mapPts[0].x, mapPts[0].y);
+        for (let k = 1; k < mapPts.length; k++) ctx.lineTo(mapPts[k].x, mapPts[k].y);
+        ctx.closePath();
 
-    sat.coverageMesh._coveragePoints.forEach(p => {
+        ctx.globalAlpha = 0.15;
+        ctx.fillStyle = css;
+        ctx.fill();
 
-        // обратно в ECI (учитываем масштаб)
-        const r = [
-            p.x * CONST.R_EARTH,
-            -p.z * CONST.R_EARTH,
-            p.y * CONST.R_EARTH
-        ];
-
-        const { lat, lon } = xyzToLatLon(r, simTime);
-
-        const { x, y } = latLonToXY(lat, lon, w, h);
-
-        if (first) {
-            ctx.moveTo(x, y);
-            first = false;
-        } else {
-            ctx.lineTo(x, y);
-        }
+        ctx.globalAlpha = 0.65;
+        ctx.strokeStyle = css;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
     });
-
-    ctx.closePath();
-    ctx.stroke();
-});
 
     ctx.globalAlpha = 1.0;
 }

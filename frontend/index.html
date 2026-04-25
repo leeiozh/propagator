@@ -28,6 +28,23 @@ body { margin:0; overflow:hidden; background:#0a0a0f; color:#ccc; font-family:mo
 
 label { display:block; margin-top:8px; }
 .value { color:#6eb5ff; float:right; }
+#orbitWarn {
+  margin-top: 6px; padding: 3px 6px;
+  font-size: 0.85em; border-radius: 3px;
+}
+#orbitWarn.warn  { background: #3a2000; color: #ffaa00; }
+#orbitWarn.error { background: #3a0000; color: #ff4444; }
+input.num-input {
+  width: 52px; text-align: right;
+  background: transparent; border: none;
+  border-bottom: 1px solid #444;
+  color: #6eb5ff; font-family: monospace; font-size: inherit;
+  padding: 0; outline: none; float: right; margin-left: 4px;
+}
+input.num-input:focus { border-bottom-color: #6eb5ff; background: #1a1a2e; }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { display: none; }
+input[type=number] { -moz-appearance: textfield; }
 </style>
 </head>
 
@@ -40,10 +57,14 @@ label { display:block; margin-top:8px; }
       <button onclick="runSim()">Run</button>
 
       <label>
-        Altitude
-        <span id="altVal" class="value"></span>
-        <input id="alt" type="range" min="200" max="10000" value="400">
+        a, km
+        <span id="smaVal" class="value"></span>
+        <input id="sma" type="range" min="6500" max="42200" step="10" value="6778">
       </label>
+      <div style="font-size:0.8em; color:#888; margin-top:2px; display:flex; justify-content:space-between;">
+        <span id="periLabel">Перигей: —</span>
+        <span id="apoLabel">Апогей: —</span>
+      </div>
 
       <label>
         Inclination
@@ -56,6 +77,8 @@ label { display:block; margin-top:8px; }
         <span id="eccVal" class="value"></span>
         <input id="ecc" type="range" min="0" max="0.99" step="0.01" value="0">
       </label>
+
+      <div id="orbitWarn"></div>
 
       <label>
         Planes
@@ -70,9 +93,9 @@ label { display:block; margin-top:8px; }
       </label>
 
       <label>
-      FOV
-      <span id="fovVal" class="value"></span>
-      <input id="fov" type="range" min="5" max="80" value="30">
+        Swath, km
+        <span id="swathVal" class="value"></span>
+        <input id="swath" type="range" min="10" max="500" value="250">
       </label>
 
       <label>
