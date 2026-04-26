@@ -175,7 +175,7 @@ function runSim() {
     simTime = 0;
 
     for (let i = 0; i < lastSeen.length; i++) {
-        lastSeen[i] = -ALLOW_TIME;
+        lastSeen[i] = -1e9;
         isCovered[i] = false;
     }
     maxRevisitTime = 0;
@@ -460,7 +460,7 @@ function updateRevisitGrid() {
             if (isPointCoveredBySat(node, satR)) covered = true;
         });
 
-        if (covered && !isCovered[idx] && lastSeen[idx] > -1e8) {
+        if (covered && !isCovered[idx] && lastSeen[idx] >= 0) {
             const gap = simTime - lastSeen[idx];
             if (gap > maxRevisitTime) maxRevisitTime = gap;
         }

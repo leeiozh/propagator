@@ -277,11 +277,19 @@ scene.add(sun);
 // Земля — цвет-заглушка на случай если текстура не загрузится
 const earthMat = new THREE.MeshPhongMaterial({ color: 0x2255aa, shininess: 15 });
 const loader = new THREE.TextureLoader();
+function applyEarthTex(tex) {
+    earthMat.map = tex;
+    earthMat.color.set(0xffffff);
+    earthMat.needsUpdate = true;
+}
 loader.load(
     "earth.jpg",
-    tex => { earthMat.map = tex; earthMat.color.set(0xffffff); earthMat.needsUpdate = true; },
+    applyEarthTex,
     undefined,
-    ()  => console.warn("earth.jpg не загрузилась, показываю синий шар")
+    () => loader.load(
+        "https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg",
+        applyEarthTex
+    )
 );
 const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), earthMat);
 scene.add(earth);
@@ -613,7 +621,7 @@ function updateRevisitGrid() {
             if (isPointCoveredBySat(node, sat.buffer[sat.bufStep - 1])) covered = true;
         });
 
-        if (covered && !isCovered[idx] && lastSeen[idx] > -1e8) {
+        if (covered && !isCovered[idx] && lastSeen[idx] >= 0) {
             const gap = simTime - lastSeen[idx];
             if (gap > maxRevisitTime) maxRevisitTime = gap;
         }
@@ -693,11 +701,15 @@ function updateNSRMap() {
     }
 
     // ---------- макс. время без покрытия ----------
-    if (maxRevisitTime > 0) {
-        const totalMin = Math.round(maxRevisitTime / 60);
-        const hh = Math.floor(totalMin / 60);
-        const mm = totalMin % 60;
-        const label = `макс. время без покрытия: ${hh}ч ${mm.toString().padStart(2, "0")}м`;
+    if (activeSats.length > 0) {
+        const label = maxRevisitTime > 0
+            ? (() => {
+                const totalMin = Math.round(maxRevisitTime / 60);
+                const hh = Math.floor(totalMin / 60);
+                const mm = totalMin % 60;
+                return `макс. время без покрытия: ${hh}ч ${mm.toString().padStart(2, "0")}м`;
+            })()
+            : "макс. время без покрытия: вычисляется…";
         ctxNSR.font = "bold 13px monospace";
         const tw = ctxNSR.measureText(label).width;
         ctxNSR.fillStyle = "rgba(0,0,0,0.55)";
